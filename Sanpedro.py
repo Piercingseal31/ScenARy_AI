@@ -160,7 +160,7 @@ while True:
     # WEB SEARCH
     # ========================================
 
-    conversation_context = ""
+    previous_conversation_context = ""
 
     if conversation_history:
         last_question = conversation_history[-1]["question"]
@@ -192,7 +192,7 @@ while True:
     ]
 
     relevance_text = f"""
-    {conversation_context}
+    {previous_conversation_context}
     {question}
     """
 
@@ -242,7 +242,7 @@ while True:
             search_query = f"""
             {fort_san_pedro_context}
 
-            {conversation_context}
+            {previous_conversation_context}
 
             Related person:
             {previous_answer}

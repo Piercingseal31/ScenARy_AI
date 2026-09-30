@@ -21,6 +21,11 @@ history, construction, architecture, cannons, artillery,
 historical events, and cultural significance
 """
 
+search_context = """
+Fort San Pedro Cebu Philippines
+historical fort
+cannons artillery
+"""
 
 # ========================================
 # QWEN AI INSTRUCTIONS
@@ -31,25 +36,110 @@ historical events, and cultural significance
 instructions = """
 You are the ScenARy AI assistant.
 
-You answer questions specifically about Fort San Pedro
-in Cebu City, Philippines.
+You answer questions about Fort San Pedro in Cebu City,
+Philippines, and related historical people, events, and topics
+when the user's question requires additional context.
 
-Use the retrieved webpage information to answer the user's question.
+Use the retrieved webpage information as the basis for your answer.
 
 Rules:
+
 - Answer directly and concisely.
-- Use the retrieved information as your primary source.
 - Do not invent historical facts.
-- If the sources do not provide the answer, say that the information
-  was not found.
-- If the sources contain conflicting information, mention the conflict.
+- Treat retrieved information as source-based information,
+  not as unquestionable truth.
+- Base your answer only on the retrieved information and
+  conversation context.
+- Do not add facts that were not found in the retrieved sources.
+
+SOURCE CONFIDENCE:
+
+- Historical biographical information, including spouses, parents,
+  children, family relationships, and places of birth, may be
+  answered when supported by the retrieved sources.
+- Do not refuse a historical question simply because it concerns
+  a person's private or family life.
+- If the search fails or no useful source information is retrieved,
+  do not infer or invent an answer.
+- Never interpret missing information as evidence that something
+  did not exist or did not happen.
+- For example, if the sources do not mention cannons, do not say
+  that the fort had no cannons.
+- Instead, state that the retrieved sources did not provide enough
+  information to answer the question.
+- If multiple retrieved sources support the same information,
+  you may say:
+  "The sources I found indicate..."
+  or
+  "Based on the available sources..."
+
+- If only one source supports an important fact, make this clear
+  by using wording such as:
+  "One source states..."
+  or
+  "According to the article..."
+
+- If the retrieved sources disagree, explain the disagreement
+  instead of choosing one answer without explanation.
+
+- If the retrieved sources provide limited information, answer
+  using the information that is available and make the limitation
+  clear.
+
+- If at least one retrieved source provides an answer, use that
+  information and identify it as coming from that source when
+  appropriate.
+
+- If multiple sources provide the same answer, you may present
+  the information more confidently while still making it clear
+  that it is based on the retrieved sources.
+
+- Only say that the information could not be found when the
+  retrieved information genuinely does not contain enough
+  information to answer the question.
+
+- Never refuse to answer simply because only one source provides
+  the information.
+
+- Do not claim that something has been verified unless the
+  retrieved sources provide enough evidence to support that claim.
+
+- Do not make every answer sound uncertain. If the retrieved
+  sources clearly agree, answer naturally while still making
+  it clear that the information comes from the sources.
+
+SOURCE ATTRIBUTION:
+
+- When useful, identify the source that supports the answer.
+- You may mention the article title, website, or both.
+- Do not list every source unnecessarily.
+- Do not invent source names or authors.
+
+HISTORICAL CONTEXT:
+
 - Pay attention to the historical period being discussed.
-- Do not assume that information about the current or later Fort San Pedro
-  also applies to the earliest wooden fort.
-- If a source gives a historical fact but does not clearly identify its
-  historical period, do not present that fact as applying to a different
-  period.
-- Use simple, easy-to-understand language.
+- Do not assume that information about the current or later
+  Fort San Pedro also applies to the earliest wooden fort.
+- If a source gives a historical fact but does not clearly
+  identify its historical period, do not present that fact
+  as applying to a different period.
+
+CONVERSATION:
+
+- Use previous conversation context when answering follow-up
+  questions.
+- Understand references such as "he", "she", "his", "her",
+  "it", and "they" using the conversation history.
+- When a follow-up question requires information about a person
+  or event related to Fort San Pedro, use the retrieved information
+  about that related subject.
+
+STYLE:
+
+- Use simple, natural, easy-to-understand language.
+- Keep answers concise.
+- Do not repeatedly begin every answer with "According to the sources."
+- Vary source-based wording naturally.
 - Do not explain your reasoning process.
 """
 
@@ -70,20 +160,123 @@ while True:
     # WEB SEARCH
     # ========================================
 
-    search_context = ""
+    conversation_context = ""
 
     if conversation_history:
-
+        last_question = conversation_history[-1]["question"]
         last_answer = conversation_history[-1]["answer"]
 
-        search_context = last_answer[:500]
+        search_context = f"""
+        Previous question:
+        {last_question}
 
+        Previous answer:
+        {last_answer[:500]}
+        """
 
-    search_query = f"""
-    Fort San Pedro Cebu Philippines
-    {search_context}
+    follow_up_words = [
+    "he",
+    "she",
+    "him",
+    "her",
+    "his",
+    "hers",
+    "they",
+    "them",
+    "their",
+    "there",
+    "it",
+    "that",
+    "those",
+    "this"
+    ]
+
+    relevance_text = f"""
+    {conversation_context}
     {question}
     """
+
+    question_words = set(
+        relevance_text.lower()
+        .replace("?", "")
+        .replace(",", "")
+        .replace(".", "")
+        .replace(":", "")
+        .split()
+    )
+
+    is_follow_up = any(
+        word in question_words
+        for word in follow_up_words
+    )
+
+    if is_follow_up and conversation_history:
+
+        previous_answer = conversation_history[-1]["answer"]
+
+        # Check whether the previous answer appears to identify
+        # a specific person that the follow-up can refer to.
+        capitalized_words = []
+
+        for word in previous_answer.split():
+
+            cleaned_word = word.strip(
+                ".,!?():;\"'"
+            )
+
+            if (
+                len(cleaned_word) > 1
+                and cleaned_word[0].isupper()
+                and not cleaned_word.isupper()
+            ):
+                capitalized_words.append(
+                    cleaned_word
+                )
+
+        has_person_context = len(
+            capitalized_words
+        ) >= 2
+
+        if has_person_context:
+
+            search_query = f"""
+            {fort_san_pedro_context}
+
+            {conversation_context}
+
+            Related person:
+            {previous_answer}
+
+            Current question:
+            {question}
+
+            Search for historical information related
+            to the person and the current question.
+            """
+
+        else:
+
+            print(
+                "\nSCENARY AI: I'm not sure who you are referring to."
+            )
+
+            print(
+                "Please provide the person's name or more context."
+            )
+
+            continue
+
+    else:
+
+        search_query = f"""
+        {fort_san_pedro_context}
+
+        Current question:
+        {question}
+
+        Search for historical information specifically
+        about Fort San Pedro and the subject of the question.
+        """
 
     print("\nSearching...")
 
@@ -97,25 +290,20 @@ while True:
 
     except Exception:
 
-        print("Search failed. Trying a simpler search...")
+        print("Search failed. Trying the search again...")
 
-    search_query = f"""
-    Fort San Pedro Cebu
-    {question}
-    """
+        try:
 
-    try:
+            search_results = DDGS().text(
+                search_query,
+                max_results=5
+            )
 
-        search_results = DDGS().text(
-            search_query,
-            max_results=5
-        )
+        except Exception:
 
-    except Exception:
+            print("Search could not find any results.")
 
-        print("Search could not find any results.")
-
-        search_results = []
+            search_results = []
 
 
     # ========================================
@@ -158,8 +346,13 @@ while True:
 
 
     # Only use two sources.
-    results = results[:2]
+    results = results[:4]
 
+    if not results:
+        print(
+            "\nSCENARY AI: I couldn't find enough information to answer that question."
+        )
+        continue
 
     # ========================================
     # FETCH WEBPAGE CONTENT
@@ -230,13 +423,21 @@ while True:
 
     def get_relevant_paragraphs(
         paragraphs,
-        question
+        question,
+        search_context
     ):
+
+        # Combine the current question with
+        # the previous conversation context.
+        relevance_text = f"""
+        {search_context}
+        {question}
+        """
 
         # Break the user's question into words
         # that can be compared with webpage text.
         question_words = set(
-            question.lower()
+            relevance_text.lower()
             .replace("?", "")
             .replace(",", "")
             .replace(".", "")
@@ -299,7 +500,8 @@ while True:
         # Find paragraphs related to the question.
         relevant_paragraphs = get_relevant_paragraphs(
             paragraphs,
-            question
+            question,
+            search_context
         )
 
         # Use relevant webpage text when available.
@@ -308,7 +510,11 @@ while True:
             relevant_text = "\n".join(
                 relevant_paragraphs
             )
+            relevant_text += f"""
 
+            SEARCH RESULT DESCRIPTION:
+            {snippet}
+            """
         # If the webpage cannot be read or
         # contains no matching paragraphs,
         # use the search engine's description.
@@ -334,7 +540,7 @@ while True:
     # ASK QWEN
     # ========================================
 
-    print("\nGenerating answer...")
+    # print("\nGenerating answer...")
 
     conversation_context = ""
 

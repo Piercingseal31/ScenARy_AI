@@ -14,3 +14,14 @@ __pycache__/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Sensitive Credentials
+serviceAccountKey.json
+*.json
+
+# Virtual Environment
+.venv/
+
+# Python Cache
+__pycache__/
+*.pyc

@@ -40,7 +40,6 @@ def load_landmarks_from_firebase():
         
     return landmarks_data
 
-# Populate LANDMARKS from Firebase 'markers' collection
 LANDMARKS = load_landmarks_from_firebase()
 
 # ========================================
@@ -49,49 +48,63 @@ LANDMARKS = load_landmarks_from_firebase()
 
 BLOCKED_DOMAINS = [
     "facebook.com", "instagram.com", "twitter.com", "x.com", 
-    "tiktok.com", "youtube.com", "reddit.com", "pinterest.com", "linkedin.com"
+    "tiktok.com", "youtube.com", "reddit.com", "pinterest.com", 
+    "linkedin.com", "wikiwand.com"
 ]
 
+SYNONYM_MAP = {
+    "wife": ["spouse", "married", "marry", "marriage", "consort", "bride"],
+    "husband": ["spouse", "married", "marry", "marriage", "consort"],
+    "parents": ["father", "mother", "born", "son of", "daughter of", "family", "parentage"],
+    "father": ["parent", "born", "son of"],
+    "mother": ["parent", "born", "son of"],
+    "founded": ["built", "established", "constructed", "foundation", "created", "erected"]
+}
+
 def is_question_in_scope(question, conversation_history, selected_landmark):
-    """
-    Strict binary classifier using Qwen 1.7B.
-    Determines if the question is strictly about the selected landmark or its specific historical figures.
-    """
     landmark_name = selected_landmark['name']
+    q_lower = question.lower()
 
-    prompt = f"""You are an absolute boundary filter.
+    # 1. DIRECT MATCH SHORTCUT
+    if landmark_name.lower() in q_lower:
+        print(f"  [SCOPE CHECK] Question: '{question}' | Allowed: True (Matched landmark name directly)")
+        return True
 
-Active Target Landmark: "{landmark_name}"
+    # 2. PRONOUN / CONTEXT SHORTCUT
+    # If the user uses common pronouns ("it", "there", "this place"), assume they mean the active landmark!
+    follow_up_triggers = ["it", "there", "they", "its", "their", "this", "here", "cannons", "materials", "built", "museum", "occupation", "war"]
+    if any(trigger in q_lower.split() for trigger in follow_up_triggers):
+        print(f"  [SCOPE CHECK] Question: '{question}' | Allowed: True (Detected pronoun/context keyword)")
+        return True
 
-User Question: "{question}"
+    # 3. FALLBACK LIGHTWEIGHT PROMPT WITH HISTORY
+    history_context = ""
+    if conversation_history:
+        last_turn = conversation_history[-1]
+        history_context = f"Previous Q: {last_turn['question']}\n"
 
-Rules:
-- Is the User Question specifically asking about "{landmark_name}" or a person directly tied to its creation/history? -> Answer YES
-- Is the User Question asking about ANY OTHER landmark (such as Magellan's Cross, Basilica del Santo Niño, Eiffel Tower, etc.)? -> Answer NO
-- Is the User Question asking about recipes, coding, weather, or general trivia? -> Answer NO
-
-Answer with ONLY ONE WORD: YES or NO."""
+    prompt = f"""Target Landmark: "{landmark_name}"
+{history_context}Current Question: "{question}"
+Is this question asking about {landmark_name} (including implied questions using pronouns)? Answer only YES or NO."""
 
     try:
         response = chat(
-            model="qwen3:1.7b",
+            model="qwen2.5:1.5b",
             messages=[{"role": "user", "content": prompt}],
-            think=False,
-            options={"temperature": 0.0, "num_ctx": 512}
+            options={"temperature": 0.0, "num_ctx": 256}
         )
         content = response["message"]["content"].strip().upper()
         if "</think>" in content:
             content = content.split("</think>")[-1].strip().upper()
 
-        decision = "YES" in content and "NO" not in content
+        decision = "YES" in content
         print(f"  [SCOPE CHECK] Question: '{question}' | Allowed: {decision} (Model output: {content})")
         return decision
     except Exception as e:
         print(f"  [SCOPE CHECK ERROR]: {e}")
-        return False  # Strict default: block if classification fails
+        return False
 
 def fetch_page(url):
-    # Skip social media / non-parsable domains
     if any(domain in url.lower() for domain in BLOCKED_DOMAINS):
         print(f"Skipping social media link: {url}")
         return []
@@ -114,67 +127,67 @@ def fetch_page(url):
             if text:
                 paragraphs.append(text)
 
-        return paragraphs[:30]
+        return paragraphs[:50]
     except Exception:
         return []
 
 def get_relevant_paragraphs(paragraphs, question, landmark_context, conversation_context):
-    relevance_text = f"{landmark_context}\n{conversation_context}\n{question}"
-    question_words = set(
-        relevance_text.lower()
-        .replace("?", "").replace(",", "").replace(".", "").split()
-    )
+    raw_question_words = [
+        w.lower().strip("?!.,:;\"'") 
+        for w in question.split() 
+        if len(w) > 2 and w.lower() not in ["what", "who", "where", "when", "how", "was", "his", "her", "their", "the"]
+    ]
+    
+    target_keywords = set(raw_question_words)
+    for word in raw_question_words:
+        if word in SYNONYM_MAP:
+            target_keywords.update(SYNONYM_MAP[word])
 
-    relevant = []
+    scored_paragraphs = []
     for paragraph in paragraphs:
-        paragraph_lower = paragraph.lower()
-        score = sum(2 for word in question_words if len(word) > 3 and word in paragraph_lower)
-        if score > 0:
-            relevant.append((score, paragraph))
+        p_lower = paragraph.lower()
+        score = sum(5 for kw in target_keywords if kw in p_lower)
+        
+        if selected_landmark['name'].lower() in p_lower:
+            score += 1
 
-    relevant.sort(key=lambda item: item[0], reverse=True)
-    return [paragraph for score, paragraph in relevant[:4]]
+        if score > 0:
+            scored_paragraphs.append((score, paragraph))
+
+    scored_paragraphs.sort(key=lambda item: item[0], reverse=True)
+    return [paragraph for _, paragraph in scored_paragraphs[:12]]
 
 def generate_search_query(question, conversation_history, selected_landmark):
     if not conversation_history:
-        clean_q = question.strip("?!.,:;")
-        return f"{selected_landmark['name']} Cebu {clean_q}"
+        # Clean extra quotes and symbols
+        clean_q = question.replace('"', '').replace("'", "").strip("?!.,:;")
+        return f"{selected_landmark['name']} {clean_q}"
 
-    history_text = ""
-    for turn in conversation_history[-3:]:
-        history_text += f"User: {turn['question']}\nAI: {turn['answer']}\n"
-
-    reformulate_prompt = f"""You are a search query generator for a historical landmark assistant.
-
-Selected Landmark: {selected_landmark['name']} ({selected_landmark['location']})
-
-Recent Conversation:
-{history_text}
-
-User's Question: "{question}"
-
-Task: Rewrite the user's question into a concise, standalone ENGLISH web search query (3 to 6 words).
-
-Rules:
-1. If the question is about a specific historical person (e.g., Miguel López de Legazpi), search for THAT PERSON's biography in English (e.g., "Miguel López de Legazpi wife Isabel biography english").
-2. Do NOT search in Spanish.
-3. Replace pronouns (he, she, his) with exact historical names from context.
-4. Output ONLY the search query text with no quotes, explanations, or formatting.
-"""
+    last_turn = conversation_history[-1]
+    
+    prompt = f"Landmark: {selected_landmark['name']}\nPrevious Q: {last_turn['question']}\nCurrent Q: {question}\nWrite a short 3 to 5 word web search query (replace pronouns with names if needed):"
 
     try:
         response = chat(
-            model="qwen3:1.7b",
-            messages=[{"role": "user", "content": reformulate_prompt}],
-            think=False,
-            options={"temperature": 0.1, "num_ctx": 1024}
+            model="qwen2.5:1.5b",
+            messages=[{"role": "user", "content": prompt}],
+            options={"temperature": 0.0, "num_ctx": 256}
         )
         query = response["message"]["content"].strip()
         if "</think>" in query:
             query = query.split("</think>")[-1].strip()
+            
+        # Clean quotes out of the AI query
+        query = query.replace('"', '').replace("'", "").strip()
+
+        if len(query) > 60 or any(bad in query.lower() for bad in ["determine", "answer", "records", "context"]):
+            clean_q = question.replace('"', '').replace("'", "").strip("?!.,:;")
+            return f"{selected_landmark['name']} {clean_q}"
+            
         return query
-    except Exception as e:
-        return f"{selected_landmark['name']} {question}"
+    except Exception:
+        clean_q = question.replace('"', '').replace("'", "").strip("?!.,:;")
+        return f"{selected_landmark['name']} {clean_q}"
 
 # ========================================
 # 3. SELECT LANDMARK MENU
@@ -208,27 +221,21 @@ Historical topics: {", ".join(selected_landmark["topics"])}
 Related people: {", ".join(selected_landmark["related_people"])}
 """
 
-# Dynamic System Instructions WITH scope guarding
-instructions = f"""You are ScenARy AI, a historical guide dedicated STRICTLY to {selected_landmark['name']}.
+instructions = f"""You are ScenARy AI, a historical guide dedicated STRICTLY to {selected_landmark['name']} in {selected_landmark['location']}.
 
 CRITICAL BOUNDARIES & ACCURACY RULES:
-1. ONLY answer questions directly related to {selected_landmark['name']} ({selected_landmark['location']}), its history, architecture, construction, or key historical figures attached to it.
-2. HISTORICAL ALIGNMENT & ACCURACY:
-   - Match historical relationships accurately. Do NOT confuse mothers, fathers, or relatives with spouses/wives.
-   - If the exact wife's name is not explicitly mentioned in the retrieved source text, state clearly: "The retrieved historical records do not specify his wife's name." Never guess or confuse relationships.
-3. Keep answers concise, factual, and direct.
-4. REFUSAL POLICY: If the user asks about a DIFFERENT landmark (e.g., asking about Magellan's Cross when Fort San Pedro is selected) or general off-topic subjects (recipes, coding, math, general trivia), YOU MUST DECLINE TO ANSWER.
-5. Decline using this statement: "I am currently set up as your guide for {selected_landmark['name']}. I can only answer questions related to this landmark!"
-6. HISTORICAL ALIGNMENT: Match time periods strictly! Do NOT confuse modern events held at the venue (e.g., mass weddings, concerts, tourist events) with 16th–19th century historical figures.
-7. Do not invent historical facts or guess facts not found in retrieved sources.
-
-SOURCE CONFIDENCE:
-- Base your answers strictly on retrieved sources and conversation context.
-- If the retrieved sources provide limited information, make that clear.
-
-STYLE:
-- Answer directly, concisely, and naturally.
-- Do not explain your reasoning process.
+1. ONLY answer questions directly related to {selected_landmark['name']} ({selected_landmark['location']}) or its historical figures.
+2. VENUE ISOLATION:
+   - Stay focused strictly on {selected_landmark['name']} in {selected_landmark['location']}.
+   - Do NOT confuse {selected_landmark['name']} with other sites built by the same historical figures in different cities.
+3. SUBJECT CONSISTENCY & ACCURACY:
+   - Stay focused strictly on the primary historical figure being asked about. Do NOT attribute facts belonging to secondary figures to the main subject.
+4. REFUSAL POLICY:
+   - If the user asks about a DIFFERENT landmark (e.g., Magellan's Cross, Basilica, Eiffel Tower), YOU MUST DECLINE TO ANSWER.
+   - Decline statement: "I am currently set up as your guide for {selected_landmark['name']}. I can only answer questions related to this landmark!"
+5. FALLBACK POLICY:
+   - If retrieved sources do not contain the specific detail requested, state clearly: "The retrieved historical records do not provide that specific detail."
+6. Keep answers concise, factual, and direct. Do not invent historical facts.
 """
 
 print(f"\nSelected landmark: {selected_landmark['name']}")
@@ -249,7 +256,6 @@ while True:
     if not question:
         continue
 
-    # Fast Pre-Check: Detect mentions of other loaded landmarks
     in_scope = is_question_in_scope(question, conversation_history, selected_landmark)
 
     if not in_scope:
@@ -260,44 +266,40 @@ while True:
         print("=" * 50)
         continue
 
-    # Build conversation context
     conversation_context = ""
     if conversation_history:
-        for turn in conversation_history[-4:]:
+        for turn in conversation_history[-3:]:
             conversation_context += f"Previous question: {turn['question']}\nPrevious answer: {turn['answer']}\n"
 
-    # Web Search
     search_query = generate_search_query(question, conversation_history, selected_landmark)
     print(f"\nSearching for: \"{search_query}\"...")
 
     search_results = []
     try:
-        # Force US English search results to prevent Spanish Wikipedia snippets
-        search_results = list(DDGS().text(f"{search_query} english", region="us-en", max_results=6))
+        with DDGS() as ddgs:
+            search_results = list(ddgs.text(f"{search_query} english", region="us-en", max_results=8))
 
-        # Filter out non-English URLs (e.g., es.wikipedia.org)
         search_results = [
             r for r in search_results 
-            if "es.wikipedia.org" not in r.get("href", "").lower()
+            if not any(domain in r.get("href", "").lower() for domain in BLOCKED_DOMAINS)
         ]
     except Exception as e:
         print(f"Search warning: {e}")
 
     preferred_domains = [
-        "wikipedia.org", "nhcp.gov.ph", "gov.ph", ".edu.ph", "museum", "archive.org", "kahibalo.com"
+        "nhcp.gov.ph", "gov.ph", ".edu.ph", "museum", "archive.org", "kahibalo.com"
     ]
 
     results = sorted(
         search_results,
         key=lambda r: any(domain in r.get("href", "").lower() for domain in preferred_domains),
         reverse=True
-    )[:3]
+    )[:2]
 
     if not results:
         print("\nSCENARY AI: I couldn't find enough information to answer that question.")
         continue
 
-    # Scrape Content
     source_information = ""
     for result in results:
         title = result.get("title", "Untitled")
@@ -318,10 +320,26 @@ while True:
 
         source_information += f"\nSOURCE: {title}\nURL: {url}\nRELEVANT INFORMATION:\n{relevant_text}\n"
 
-    # Final Response Generation
+    # === NEW ANTI-HALLUCINATION SAFETY NET ===
+    if not source_information.strip() or len(source_information.strip()) < 30:
+        print("\n" + "=" * 50)
+        print("SCENARY AI")
+        print("=" * 50)
+        print("The retrieved historical records do not provide that specific detail.")
+        print("=" * 50)
+        conversation_history.append({
+            "question": question,
+            "answer": "The retrieved historical records do not provide that specific detail."
+        })
+        continue
+    # =========================================
+
+    if len(source_information) > 12000:
+        source_information = source_information[:12000] + "\n[Text truncated due to length]"
+
     try:
         response = chat(
-            model="qwen3:1.7b",
+            model="qwen2.5:1.5b",
             messages=[
                 {"role": "system", "content": instructions},
                 {
@@ -329,8 +347,7 @@ while True:
                     "content": f"Conversation history:\n{conversation_context}\n\nRetrieved information:\n{source_information}\n\nCurrent question:\n{question}"
                 }
             ],
-            think=False,
-            options={"temperature": 0.3, "num_ctx": 2048}
+            options={"temperature": 0.1, "num_ctx": 4096}
         )
 
         answer = response["message"]["content"]
